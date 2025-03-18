@@ -114,9 +114,9 @@ def show_dashboard():
                 min_allowed = base_value * (1 - max_decline)
                 max_allowed = base_value * (1 + max_growth)
                 
-                # Calculate wider ranges for confidence intervals
-                min_allowed_lower = base_value * (1 - max_decline * 1.5)  # 22.5% decline for lower bound
-                max_allowed_upper = base_value * (1 + max_growth * 1.5)   # 22.5% growth for upper bound
+                # Calculate confidence interval limits - strict 5% variance
+                min_allowed_lower = base_value * 0.95  # 5% decline for lower bound
+                max_allowed_upper = base_value * 1.05  # 5% growth for upper bound
                 
                 # Clip the forecasted values with different ranges for bounds
                 forecast.loc[idx, 'yhat'] = np.clip(forecast.loc[idx, 'yhat'], min_allowed, max_allowed)
@@ -125,7 +125,7 @@ def show_dashboard():
             
             forecasts[metric] = forecast
         
-        # Create fixed salary forecast
+        # Create fixed salary forecast - exactly ₹22,000 for each month
         salary_dates = pd.date_range(start='2025-03-01', end='2025-12-31', freq='M')
         forecasts['SALARY'] = pd.DataFrame({
             'ds': salary_dates,
@@ -151,7 +151,23 @@ def show_dashboard():
         # Create visualization with connected segments
         fig = go.Figure()
         
-        # Add pre-landslide historical data
+        # Get the last historical data point and first forecast point
+        last_historical_date = df[df['MONTH'] < pd.to_datetime('2025-03-01')].iloc[-1]['MONTH']
+        last_historical_value = df[df['MONTH'] < pd.to_datetime('2025-03-01')].iloc[-1]['P&L']
+        first_forecast_date = forecast_df['ds'].iloc[0]
+        first_forecast_value = forecast_df['P&L'].iloc[0]
+        
+        # Calculate intermediate point for smoother transition
+        intermediate_date = last_historical_date + (first_forecast_date - last_historical_date) * 0.5
+        intermediate_value = last_historical_value + (first_forecast_value - last_historical_value) * 0.5
+        
+        # Create connection points for smoother transition
+        connection_points = pd.DataFrame({
+            'MONTH': [last_historical_date, intermediate_date, first_forecast_date],
+            'P&L': [last_historical_value, intermediate_value, first_forecast_value]
+        })
+        
+        # Create continuous historical line (pre-landslide)
         pre_landslide = df[df['MONTH'] < anomaly_start]
         fig.add_trace(go.Scatter(
             x=pre_landslide['MONTH'],
@@ -168,13 +184,23 @@ def show_dashboard():
             line=dict(color='#4CAF50', width=2, dash='dot')
         ))
         
-        # Add post-landslide data
-        post_landslide = df[df['MONTH'] > anomaly_end]
+        # Add post-landslide historical data
+        post_landslide = df[(df['MONTH'] > anomaly_end) & (df['MONTH'] < pd.to_datetime('2025-03-01'))]
+        if not post_landslide.empty:
+            fig.add_trace(go.Scatter(
+                x=post_landslide['MONTH'],
+                y=post_landslide['P&L'],
+                name='Post-Landslide P&L',
+                line=dict(color='#4CAF50', width=2)
+            ))
+        
+        # Add connection to forecast (smooth transition)
         fig.add_trace(go.Scatter(
-            x=post_landslide['MONTH'],
-            y=post_landslide['P&L'],
-            name='Post-Landslide P&L',
-            line=dict(color='#4CAF50', width=2)
+            x=connection_points['MONTH'],
+            y=connection_points['P&L'],
+            name='Connection',
+            line=dict(color='#4CAF50', width=2),
+            showlegend=False
         ))
         
         # Add forecast
@@ -185,14 +211,14 @@ def show_dashboard():
             line=dict(color='#4CAF50', width=2, dash='dash')
         ))
         
-        # Add confidence interval
+        # Add confidence interval with 5% variance
         fig.add_trace(go.Scatter(
             x=forecast_df['ds'].tolist() + forecast_df['ds'].tolist()[::-1],
             y=forecast_df['P&L_upper'].tolist() + forecast_df['P&L_lower'].tolist()[::-1],
             fill='toself',
             fillcolor='rgba(76, 175, 80, 0.2)',
             line=dict(color='rgba(255,255,255,0)'),
-            name='95% Confidence Interval'
+            name='5% Confidence Interval'
         ))
         
         # Update layout
@@ -252,27 +278,28 @@ def show_dashboard():
         # Display the plot
         st.plotly_chart(fig, use_container_width=True)
         
-        # Prepare and display consolidated forecast table
+        # Prepare and display forecast table
         st.markdown("### Forecasted Values for 2025")
         
-        # Create consolidated forecast table
-        consolidated_table = pd.DataFrame({
+        # Create normal forecast table with fixed salary
+        normal_forecast = pd.DataFrame({
             'Month': forecast_df['ds'].dt.strftime('%B'),
-            'Sales (Lower)': forecasts['SALES']['yhat_lower'].round(2),
-            'Sales (Base)': forecast_df['sales'].round(2),
-            'Sales (Upper)': forecasts['SALES']['yhat_upper'].round(2),
-            'Expenses (Lower)': forecasts['EXPENSES']['yhat_lower'].round(2),
-            'Expenses (Base)': forecast_df['expenses'].round(2),
-            'Expenses (Upper)': forecasts['EXPENSES']['yhat_upper'].round(2),
+            'Sales': forecast_df['sales'].round(2),
+            'Expenses': forecast_df['expenses'].round(2),
             'Salary': forecast_df['salary'].round(2),
-            'P&L (Lower)': forecast_df['P&L_lower'].round(2),
-            'P&L (Base)': forecast_df['P&L'].round(2),
-            'P&L (Upper)': forecast_df['P&L_upper'].round(2)
+            'P&L': forecast_df['P&L'].round(2)
         })
-        consolidated_table.set_index('Month', inplace=True)
+        normal_forecast.set_index('Month', inplace=True)
         
-        # Display consolidated table
-        st.dataframe(consolidated_table)
+        # Display only the base forecast table for Travellers Cavern
+        st.markdown("#### Forecast with Fixed Salary (₹22,000)")
+        st.dataframe(normal_forecast)
+        
+        # Add note about fixed salary
+        st.info("""
+            **Note:** For Travellers Cavern, a fixed salary of ₹22,000 is applied for all forecasted months.
+            No optimization ratios are applied to this business.
+        """)
         
     except Exception as e:
         st.error("An error occurred in the dashboard")
